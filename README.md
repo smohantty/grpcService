@@ -7,11 +7,13 @@ A C++17 gRPC service that provides an image retrieval interface. The project inc
 - **gRPC Service Interface**:
   - `GetImage()` method that returns `ImageData`
   - `doSegmentation()` method with streaming callbacks for real-time progress updates
+  - `subscribeToNotifications()` method for server push notifications to all connected clients
 - **Unix Domain Socket IPC**: Client and server communicate via Unix domain sockets for efficient local IPC
 - **Multi-client Support**: Server can handle multiple concurrent client connections
 - **C++17 Implementation**: Modern C++ with proper error handling
 - **Sample Data**: Pre-loaded with sample images for testing
 - **Real-time Callbacks**: Server-side streaming for segmentation progress updates
+- **Server Push Notifications**: Bidirectional streaming for broadcasting messages to all subscribers
 
 ## Project Structure
 
@@ -23,6 +25,7 @@ grpcService/
 ├── CMakeLists.txt          # Build configuration
 ├── build.sh                # Build script
 ├── test_segmentation.sh    # Segmentation test script
+├── test_notifications.sh   # Notification test script
 ├── README.md               # This file
 └── requirement.txt         # Original requirements
 ```
@@ -178,6 +181,39 @@ The `doSegmentation` API uses server-side streaming to provide real-time updates
 3. **Final Result**: "completed" status with segmented image and quality metrics
 4. **Error Handling**: "failed" status with error message if something goes wrong
 
+### subscribeToNotifications API
+
+#### SubscriptionRequest Message
+
+The `SubscriptionRequest` message contains:
+
+- `client_id` (string): Unique identifier for the client
+- `client_name` (string): Display name of the client
+- `topics` (repeated string): Topics the client wants to subscribe to
+- `preferences` (map<string, string>): Client preferences for notifications
+
+#### ServerNotification Message
+
+The `ServerNotification` message contains:
+
+- `notification_id` (string): Unique identifier for the notification
+- `topic` (string): Topic the notification belongs to
+- `message` (string): The notification message
+- `notification_type` (string): Type of notification ("info", "warning", "error", "update")
+- `timestamp` (int64): Timestamp when the notification was created
+- `metadata` (map<string, string>): Additional metadata
+- `data` (bytes): Optional binary data
+
+#### Bidirectional Streaming Flow
+
+The `subscribeToNotifications` API uses bidirectional streaming:
+
+1. **Client Subscription**: Client sends subscription request with topics and preferences
+2. **Server Registration**: Server registers client and sends welcome notification
+3. **Real-time Notifications**: Server can push notifications to all subscribed clients
+4. **Topic-based Filtering**: Clients receive only notifications for topics they subscribed to
+5. **Automatic Cleanup**: Server removes disconnected clients automatically
+
 ### Available Sample Images
 
 The server comes pre-loaded with these sample images:
@@ -203,8 +239,12 @@ The server comes pre-loaded with these sample images:
 # Test all segmentation types
 ./image_client --test-segmentation
 
-# Run the comprehensive test script
+# Subscribe to notifications
+./image_client --test-notifications
+
+# Run the comprehensive test scripts
 ./test_segmentation.sh
+./test_notifications.sh
 ```
 
 ### Server Output

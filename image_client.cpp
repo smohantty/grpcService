@@ -17,6 +17,8 @@ using imageservice::GetImageRequest;
 using imageservice::ImageData;
 using imageservice::SegmentationRequest;
 using imageservice::SegmentationResult;
+using imageservice::SubscriptionRequest;
+using imageservice::ServerNotification;
 
 class ImageServiceClient {
 public:
@@ -159,6 +161,99 @@ public:
         return true;
     }
 
+    // Subscribe to server notifications
+    bool subscribeToNotifications(const std::vector<std::string>& topics = {"system", "status"}) {
+        std::cout << "🔔 Subscribing to notifications..." << std::endl;
+        std::cout << "   Client: " << client_name_ << std::endl;
+        std::cout << "   Topics: ";
+        for (const auto& topic : topics) {
+            std::cout << topic << " ";
+        }
+        std::cout << std::endl;
+        std::cout << "===========================================" << std::endl;
+
+        // Context for the client
+        ClientContext context;
+        context.AddMetadata("client-name", client_name_);
+
+        // Set a long deadline for subscription (it's a long-running connection)
+        auto deadline = std::chrono::system_clock::now() + std::chrono::hours(24);
+        context.set_deadline(deadline);
+
+        // Create the bidirectional streaming
+        std::unique_ptr<grpc::ClientReaderWriter<SubscriptionRequest, ServerNotification>> stream(
+            stub_->subscribeToNotifications(&context));
+
+        // Send initial subscription request
+        SubscriptionRequest request;
+        request.set_client_id(generateClientId());
+        request.set_client_name(client_name_);
+
+        // Add topics
+        for (const auto& topic : topics) {
+            request.add_topics(topic);
+        }
+
+        // Add some preferences
+        request.mutable_preferences()->insert({"notification_format", "detailed"});
+        request.mutable_preferences()->insert({"language", "en"});
+
+        if (!stream->Write(request)) {
+            std::cout << "❌ Failed to send subscription request" << std::endl;
+            return false;
+        }
+
+        std::cout << "✅ Subscription request sent successfully" << std::endl;
+        std::cout << "📡 Listening for notifications..." << std::endl;
+
+        // Start a thread to handle incoming notifications
+        std::thread notification_thread([&stream]() {
+            ServerNotification notification;
+            while (stream->Read(&notification)) {
+                auto timestamp = std::chrono::milliseconds(notification.timestamp());
+                auto time_point = std::chrono::system_clock::time_point(timestamp);
+                auto time_t = std::chrono::system_clock::to_time_t(time_point);
+
+                std::cout << "📢 [" << std::put_time(std::localtime(&time_t), "%H:%M:%S") << "] "
+                          << notification.notification_type() << " - " << notification.topic()
+                          << ": " << notification.message() << std::endl;
+
+                // Display metadata if present
+                if (!notification.metadata().empty()) {
+                    std::cout << "   📋 Metadata: ";
+                    for (const auto& meta : notification.metadata()) {
+                        std::cout << meta.first << "=" << meta.second << " ";
+                    }
+                    std::cout << std::endl;
+                }
+
+                // Display data size if present
+                if (!notification.data().empty()) {
+                    std::cout << "   📦 Data size: " << notification.data().size() << " bytes" << std::endl;
+                }
+
+                std::cout << std::endl;
+            }
+        });
+
+        // Keep the main thread alive and handle user input
+        std::cout << "💡 Press Enter to unsubscribe and exit..." << std::endl;
+        std::cin.get();
+
+        // Cleanup
+        stream->WritesDone();
+        Status status = stream->Finish();
+        notification_thread.join();
+
+        if (!status.ok()) {
+            std::cout << "❌ Stream ended with error: " << status.error_message() << std::endl;
+            return false;
+        }
+
+        std::cout << "✅ Successfully unsubscribed from notifications" << std::endl;
+        return true;
+    }
+
     // Test multiple requests to demonstrate concurrent capability
     void TestMultipleRequests() {
         std::vector<std::string> test_images = {"img001", "img002", "img003", "img999"}; // img999 doesn't exist
@@ -195,7 +290,25 @@ public:
         }
     }
 
+    // Test notification functionality
+    void TestNotifications() {
+        std::cout << "🚀 Testing notification subscription..." << std::endl;
+        std::cout << "===========================================" << std::endl;
+
+        std::vector<std::string> test_topics = {"system", "status", "updates", "alerts"};
+        subscribeToNotifications(test_topics);
+    }
+
 private:
+    std::string generateClientId() {
+        static std::atomic<int> counter{0};
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> dis(1000, 9999);
+
+        return "client_" + std::to_string(counter.fetch_add(1)) + "_" + std::to_string(dis(gen));
+    }
+
     std::unique_ptr<ImageService::Stub> stub_;
     std::string client_name_;
 };
@@ -218,6 +331,7 @@ int main(int argc, char** argv) {
     std::string image_id = "";
     std::string segmentation_type = "";
     bool test_segmentation = false;
+    bool test_notifications = false;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -230,6 +344,8 @@ int main(int argc, char** argv) {
             segmentation_type = argv[++i];
         } else if (arg == "--test-segmentation") {
             test_segmentation = true;
+        } else if (arg == "--test-notifications") {
+            test_notifications = true;
         } else if (arg[0] != '-') {
             // Non-flag argument - treat as image_id if we don't have one yet
             if (image_id.empty()) {
@@ -247,7 +363,10 @@ int main(int argc, char** argv) {
         client_name);
 
     // Check what operation to perform
-    if (test_segmentation) {
+    if (test_notifications) {
+        // Run notification tests
+        client.TestNotifications();
+    } else if (test_segmentation) {
         // Run segmentation tests
         client.TestSegmentation();
     } else if (!segmentation_type.empty() && !image_id.empty()) {

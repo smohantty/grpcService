@@ -35,6 +35,25 @@ message SegmentationResult {
   string error_message = 6;  // Only set if status is "failed"
 }
 
+// Client subscription request for notifications
+message SubscriptionRequest {
+  string client_id = 1;
+  string client_name = 2;
+  repeated string topics = 3;  // Topics the client wants to subscribe to
+  map<string, string> preferences = 4;  // Client preferences
+}
+
+// Server notification message
+message ServerNotification {
+  string notification_id = 1;
+  string topic = 2;
+  string message = 3;
+  string notification_type = 4;  // "info", "warning", "error", "update"
+  int64 timestamp = 5;
+  map<string, string> metadata = 6;  // Additional metadata
+  bytes data = 7;  // Optional binary data
+}
+
 // ImageService definition
 service ImageService {
   // GetImage RPC method that returns ImageData
@@ -42,4 +61,7 @@ service ImageService {
 
   // doSegmentation RPC method that returns results via streaming callback
   rpc doSegmentation(SegmentationRequest) returns (stream SegmentationResult);
+
+  // subscribeToNotifications RPC method for server push notifications
+  rpc subscribeToNotifications(stream SubscriptionRequest) returns (stream ServerNotification);
 }

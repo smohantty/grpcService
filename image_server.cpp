@@ -11,6 +11,8 @@
 #include <iomanip>
 #include <atomic>
 #include <random>
+#include <set>
+#include <condition_variable>
 
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
@@ -21,12 +23,15 @@ using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::ServerWriter;
+using grpc::ServerReaderWriter;
 using grpc::Status;
 using imageservice::ImageService;
 using imageservice::GetImageRequest;
 using imageservice::ImageData;
 using imageservice::SegmentationRequest;
 using imageservice::SegmentationResult;
+using imageservice::SubscriptionRequest;
+using imageservice::ServerNotification;
 
 // Global connection tracking
 class ConnectionTracker {
@@ -67,12 +72,211 @@ private:
     std::atomic<int> active_connections_{0};
 };
 
+// Client subscription manager
+class SubscriptionManager {
+public:
+    static SubscriptionManager& getInstance() {
+        static SubscriptionManager instance;
+        return instance;
+    }
+
+    void addClient(const std::string& client_id, const std::string& client_name,
+                   const std::vector<std::string>& topics,
+                   ServerReaderWriter<ServerNotification, SubscriptionRequest>* stream) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        ClientInfo client_info;
+        client_info.client_name = client_name;
+        client_info.topics = std::set<std::string>(topics.begin(), topics.end());
+        client_info.stream = stream;
+        client_info.last_activity = std::chrono::system_clock::now();
+
+        clients_[client_id] = client_info;
+
+        // Add client to topic subscriptions
+        for (const auto& topic : topics) {
+            topic_subscriptions_[topic].insert(client_id);
+        }
+
+        std::cout << "[SUBSCRIPTION] Client " << client_name << " (" << client_id
+                  << ") subscribed to " << topics.size() << " topics" << std::endl;
+    }
+
+    void removeClient(const std::string& client_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto it = clients_.find(client_id);
+        if (it != clients_.end()) {
+            // Remove from topic subscriptions
+            for (const auto& topic : it->second.topics) {
+                auto topic_it = topic_subscriptions_.find(topic);
+                if (topic_it != topic_subscriptions_.end()) {
+                    topic_it->second.erase(client_id);
+                    if (topic_it->second.empty()) {
+                        topic_subscriptions_.erase(topic_it);
+                    }
+                }
+            }
+
+            std::cout << "[SUBSCRIPTION] Client " << it->second.client_name
+                      << " (" << client_id << ") unsubscribed" << std::endl;
+            clients_.erase(it);
+        }
+    }
+
+    void broadcastNotification(const std::string& topic, const std::string& message,
+                              const std::string& notification_type = "info",
+                              const std::map<std::string, std::string>& metadata = {}) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto topic_it = topic_subscriptions_.find(topic);
+        if (topic_it == topic_subscriptions_.end()) {
+            std::cout << "[BROADCAST] No subscribers for topic: " << topic << std::endl;
+            return;
+        }
+
+        ServerNotification notification;
+        notification.set_notification_id(generateNotificationId());
+        notification.set_topic(topic);
+        notification.set_message(message);
+        notification.set_notification_type(notification_type);
+        notification.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+        // Add metadata
+        for (const auto& meta : metadata) {
+            notification.mutable_metadata()->insert(meta);
+        }
+
+        std::vector<std::string> failed_clients;
+
+        for (const auto& client_id : topic_it->second) {
+            auto client_it = clients_.find(client_id);
+            if (client_it != clients_.end()) {
+                try {
+                    if (!client_it->second.stream->Write(notification)) {
+                        failed_clients.push_back(client_id);
+                        std::cout << "[BROADCAST] Failed to send notification to client: "
+                                  << client_it->second.client_name << std::endl;
+                    } else {
+                        client_it->second.last_activity = std::chrono::system_clock::now();
+                        std::cout << "[BROADCAST] Sent notification to " << client_it->second.client_name
+                                  << " on topic: " << topic << std::endl;
+                    }
+                } catch (...) {
+                    failed_clients.push_back(client_id);
+                    std::cout << "[BROADCAST] Exception sending notification to client: "
+                              << client_it->second.client_name << std::endl;
+                }
+            }
+        }
+
+        // Remove failed clients
+        for (const auto& failed_client : failed_clients) {
+            removeClient(failed_client);
+        }
+
+        std::cout << "[BROADCAST] Notification sent to "
+                  << (topic_it->second.size() - failed_clients.size())
+                  << " clients on topic: " << topic << std::endl;
+    }
+
+    void broadcastToAll(const std::string& message, const std::string& notification_type = "info") {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        ServerNotification notification;
+        notification.set_notification_id(generateNotificationId());
+        notification.set_topic("broadcast");
+        notification.set_message(message);
+        notification.set_notification_type(notification_type);
+        notification.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+        std::vector<std::string> failed_clients;
+
+        for (auto& client : clients_) {
+            try {
+                if (!client.second.stream->Write(notification)) {
+                    failed_clients.push_back(client.first);
+                } else {
+                    client.second.last_activity = std::chrono::system_clock::now();
+                }
+            } catch (...) {
+                failed_clients.push_back(client.first);
+            }
+        }
+
+        // Remove failed clients
+        for (const auto& failed_client : failed_clients) {
+            removeClient(failed_client);
+        }
+
+        std::cout << "[BROADCAST] Broadcast message sent to "
+                  << (clients_.size() - failed_clients.size()) << " clients" << std::endl;
+    }
+
+    int getActiveSubscribers() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return clients_.size();
+    }
+
+    void printStats() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::cout << "[STATS] Active subscribers: " << clients_.size() << std::endl;
+        std::cout << "[STATS] Active topics: " << topic_subscriptions_.size() << std::endl;
+        for (const auto& topic : topic_subscriptions_) {
+            std::cout << "  - " << topic.first << ": " << topic.second.size() << " subscribers" << std::endl;
+        }
+    }
+
+    std::string generateNotificationId() {
+        static std::atomic<int> counter{0};
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> dis(1000, 9999);
+
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()) % 1000;
+
+        std::stringstream ss;
+        ss << "notif_" << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
+           << "_" << std::setfill('0') << std::setw(3) << ms.count()
+           << "_" << dis(gen);
+
+        return ss.str();
+    }
+
+private:
+    struct ClientInfo {
+        std::string client_name;
+        std::set<std::string> topics;
+        ServerReaderWriter<ServerNotification, SubscriptionRequest>* stream;
+        std::chrono::system_clock::time_point last_activity;
+    };
+
+    mutable std::mutex mutex_;
+    std::unordered_map<std::string, ClientInfo> clients_;
+    std::unordered_map<std::string, std::set<std::string>> topic_subscriptions_;
+};
+
 // Logic and data behind the server's behavior.
 class ImageServiceImpl final : public ImageService::Service {
 public:
     ImageServiceImpl() {
         // Initialize sample image data
         initializeSampleImages();
+
+        // Start background thread for periodic notifications
+        startNotificationThread();
+    }
+
+    ~ImageServiceImpl() {
+        stop_notification_thread_ = true;
+        if (notification_thread_.joinable()) {
+            notification_thread_.join();
+        }
     }
 
     Status GetImage(ServerContext* context, const GetImageRequest* request,
@@ -220,13 +424,131 @@ public:
         return Status::OK;
     }
 
+    Status subscribeToNotifications(ServerContext* context,
+                                   ServerReaderWriter<ServerNotification, SubscriptionRequest>* stream) override {
+        // Track connection
+        ConnectionTracker::getInstance().clientConnected();
+
+        // Get client information from metadata
+        std::string client_name = "unknown_client";
+        auto client_name_metadata = context->client_metadata().find("client-name");
+        if (client_name_metadata != context->client_metadata().end()) {
+            client_name = std::string(client_name_metadata->second.begin(), client_name_metadata->second.end());
+        }
+
+        std::cout << "[SUBSCRIPTION] New subscription request from: " << client_name << std::endl;
+
+        SubscriptionRequest request;
+        std::string client_id;
+        bool client_registered = false;
+
+        // Read subscription requests from client
+        while (stream->Read(&request)) {
+            if (!client_registered) {
+                client_id = request.client_id().empty() ? generateClientId() : request.client_id();
+
+                // Convert repeated string to vector
+                std::vector<std::string> topics(request.topics().begin(), request.topics().end());
+
+                // Register client with subscription manager
+                SubscriptionManager::getInstance().addClient(client_id, request.client_name(), topics, stream);
+                client_registered = true;
+
+                // Send welcome notification
+                ServerNotification welcome_notification;
+                welcome_notification.set_notification_id(SubscriptionManager::getInstance().generateNotificationId());
+                welcome_notification.set_topic("system");
+                welcome_notification.set_message("Welcome! You are now subscribed to notifications.");
+                welcome_notification.set_notification_type("info");
+                welcome_notification.set_timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+
+                stream->Write(welcome_notification);
+
+                std::cout << "[SUBSCRIPTION] Client " << client_name << " registered with ID: " << client_id << std::endl;
+            } else {
+                // Handle subscription updates
+                std::cout << "[SUBSCRIPTION] Client " << client_name << " updated preferences" << std::endl;
+            }
+        }
+
+        // Client disconnected, remove from subscription manager
+        if (client_registered) {
+            SubscriptionManager::getInstance().removeClient(client_id);
+        }
+
+        std::cout << "[SUBSCRIPTION] Client " << client_name << " disconnected" << std::endl;
+        ConnectionTracker::getInstance().clientDisconnected();
+        return Status::OK;
+    }
+
     // Method to get current connection statistics
     void PrintConnectionStats() const {
         std::cout << "[STATS] Current active connections: "
                   << ConnectionTracker::getInstance().getActiveConnections() << std::endl;
+        SubscriptionManager::getInstance().printStats();
+    }
+
+    // Method to broadcast notifications (can be called from other parts of the server)
+    void BroadcastNotification(const std::string& topic, const std::string& message,
+                              const std::string& notification_type = "info") {
+        SubscriptionManager::getInstance().broadcastNotification(topic, message, notification_type);
+    }
+
+    void BroadcastToAll(const std::string& message, const std::string& notification_type = "info") {
+        SubscriptionManager::getInstance().broadcastToAll(message, notification_type);
     }
 
 private:
+    void startNotificationThread() {
+        notification_thread_ = std::thread([this]() {
+            while (!stop_notification_thread_) {
+                std::this_thread::sleep_for(std::chrono::seconds(30));
+
+                // Send periodic system notifications
+                auto now = std::chrono::system_clock::now();
+                auto time_t = std::chrono::system_clock::to_time_t(now);
+
+                std::stringstream ss;
+                ss << "System status update at " << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+
+                BroadcastToAll(ss.str(), "info");
+
+                // Send topic-specific notifications
+                BroadcastNotification("system", "Periodic system check completed", "info");
+                BroadcastNotification("status", "Server is running normally", "info");
+            }
+        });
+    }
+
+    std::string generateClientId() {
+        static std::atomic<int> counter{0};
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> dis(1000, 9999);
+
+        return "client_" + std::to_string(counter.fetch_add(1)) + "_" + std::to_string(dis(gen));
+    }
+
+    std::string generateRequestId() {
+        static std::atomic<int> counter{0};
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> dis(1000, 9999);
+
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()) % 1000;
+
+        std::stringstream ss;
+        ss << "req_" << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
+           << "_" << std::setfill('0') << std::setw(3) << ms.count()
+           << "_" << dis(gen);
+
+        return ss.str();
+    }
+
     void initializeSampleImages() {
         // Create sample image data
         ImageData image1;
@@ -272,25 +594,8 @@ private:
         std::cout << "Initialized " << sample_images_.size() << " sample images" << std::endl;
     }
 
-    std::string generateRequestId() {
-        static std::atomic<int> counter{0};
-        static std::random_device rd;
-        static std::mt19937 gen(rd());
-        static std::uniform_int_distribution<> dis(1000, 9999);
-
-        auto now = std::chrono::system_clock::now();
-        auto time_t = std::chrono::system_clock::to_time_t(now);
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()) % 1000;
-
-        std::stringstream ss;
-        ss << "req_" << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
-           << "_" << std::setfill('0') << std::setw(3) << ms.count()
-           << "_" << dis(gen);
-
-        return ss.str();
-    }
-
+    std::thread notification_thread_;
+    std::atomic<bool> stop_notification_thread_{false};
     std::unordered_map<std::string, ImageData> sample_images_;
 };
 
