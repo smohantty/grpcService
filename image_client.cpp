@@ -3,6 +3,7 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <random>
 
 #include <grpcpp/grpcpp.h>
 
@@ -17,8 +18,8 @@ using imageservice::ImageData;
 
 class ImageServiceClient {
 public:
-    ImageServiceClient(std::shared_ptr<Channel> channel)
-        : stub_(ImageService::NewStub(channel)) {}
+    ImageServiceClient(std::shared_ptr<Channel> channel, const std::string& client_name = "default_client")
+        : stub_(ImageService::NewStub(channel)), client_name_(client_name) {}
 
     // Assembles the client's payload, sends it and presents the response back
     // from the server.
@@ -33,6 +34,9 @@ public:
         // Context for the client. It could be used to convey extra information to
         // the server and/or tweak certain RPC behaviors.
         ClientContext context;
+
+        // Set client name in metadata
+        context.AddMetadata("client-name", client_name_);
 
         // Set a deadline for the RPC call (optional)
         auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(30);
@@ -79,30 +83,51 @@ public:
 
 private:
     std::unique_ptr<ImageService::Stub> stub_;
+    std::string client_name_;
 };
+
+// Generate a random client name
+std::string generateClientName() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> dis(1000, 9999);
+
+    return "client_" + std::to_string(dis(gen));
+}
 
 int main(int argc, char** argv) {
     std::cout << "Starting ImageService gRPC Client..." << std::endl;
 
     // Default server address - Unix domain socket for local IPC
     std::string target_str = "unix:///tmp/image_service.sock";
+    std::string client_name = generateClientName();
+    std::string image_id = "";
 
-    // Allow user to specify server address as command line argument
-    if (argc > 1) {
-        target_str = argv[1];
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--name" && i + 1 < argc) {
+            client_name = argv[++i];
+        } else if (arg == "--target" && i + 1 < argc) {
+            target_str = argv[++i];
+        } else if (arg[0] != '-') {
+            // Non-flag argument - treat as image_id if we don't have one yet
+            if (image_id.empty()) {
+                image_id = arg;
+            }
+        }
     }
 
-    std::cout << "Connecting to server via Unix socket: " << target_str << std::endl;
+    std::cout << "Connecting to server via: " << target_str << std::endl;
+    std::cout << "Client name: " << client_name << std::endl;
 
-    // Instantiate the client. It requires a channel, out of which the actual RPCs
-    // are created. This channel models a connection to an endpoint specified by
-    // the argument "--target=" which is the only expected argument.
+    // Instantiate the client
     ImageServiceClient client(
-        grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()));
+        grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials()),
+        client_name);
 
-    // Check if specific image ID was provided as command line argument
-    if (argc > 2) {
-        std::string image_id = argv[2];
+    // Check if specific image ID was provided
+    if (!image_id.empty()) {
         std::cout << "Requesting specific image: " << image_id << std::endl;
         client.GetImage(image_id);
     } else {

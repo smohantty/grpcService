@@ -76,9 +76,17 @@ public:
         // Track connection (simplified approach)
         ConnectionTracker::getInstance().clientConnected();
 
-        // Get client peer information
+        // Get client information from metadata
+        std::string client_name = "unknown_client";
+        auto client_name_metadata = context->client_metadata().find("client-name");
+        if (client_name_metadata != context->client_metadata().end()) {
+            client_name = std::string(client_name_metadata->second.begin(), client_name_metadata->second.end());
+        }
+
+        // Get client peer information as fallback
         std::string peer = context->peer();
-        std::cout << "[REQUEST] Received GetImage request from: " << peer << std::endl;
+
+        std::cout << "[REQUEST] Received GetImage request from: " << client_name << std::endl;
         std::cout << "[REQUEST] Request for image_id: " << request->image_id() << std::endl;
         std::cout << "[STATUS] Active connections: " << ConnectionTracker::getInstance().getActiveConnections() << std::endl;
 
@@ -95,7 +103,7 @@ public:
         *reply = it->second;
 
         std::cout << "[RESPONSE] Sending image: " << reply->image_name()
-                  << " (size: " << reply->size() << " bytes) to " << peer << std::endl;
+                  << " (size: " << reply->size() << " bytes) to " << client_name << std::endl;
 
         // Track disconnection after successful response
         ConnectionTracker::getInstance().clientDisconnected();
