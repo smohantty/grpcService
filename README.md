@@ -22,10 +22,14 @@ grpcService/
 ├── image_service.proto      # Protocol buffer definition
 ├── image_server.cpp         # Server implementation
 ├── image_client.cpp         # Client implementation
-├── CMakeLists.txt          # Build configuration
-├── build.sh                # Build script
-├── test_segmentation.sh    # Segmentation test script
-├── test_notifications.sh   # Notification test script
+├── CMakeLists.txt          # CMake build configuration
+├── meson.build              # Meson build configuration
+├── meson_options.txt        # Meson build options
+├── build.sh                 # CMake build script
+├── build_meson.sh           # Meson build script
+├── setup_dev.sh             # Development environment setup
+├── test_segmentation.sh     # Segmentation test script
+├── test_notifications.sh    # Notification test script
 ├── README.md               # This file
 └── requirement.txt         # Original requirements
 ```
@@ -100,6 +104,69 @@ sudo dnf install -y grpc-devel protobuf-devel grpc-plugins
    - `image_server` - The gRPC server executable
    - `image_client` - The gRPC client executable
    - Generated protobuf files in the build directory
+
+### Option 3: Using Meson (Alternative Build System)
+
+The project also supports Meson as an alternative build system, which offers faster builds and better dependency management.
+
+#### Prerequisites for Meson
+
+```bash
+# Install Meson and Ninja
+pip install meson ninja
+
+# Or on macOS:
+brew install meson ninja
+```
+
+#### Building with Meson
+
+1. **Using the Meson build script (Recommended):**
+   ```bash
+   ./build_meson.sh
+   ```
+
+2. **Manual Meson build:**
+   ```bash
+   # Configure with Meson
+   meson setup build_meson
+
+   # Build the project
+   cd build_meson
+   ninja
+   ```
+
+3. **Development setup (installs dependencies):**
+   ```bash
+   ./setup_dev.sh
+   ```
+
+#### Meson Build Options
+
+You can customize the build with various options:
+
+```bash
+# Configure with specific options
+meson setup build_meson \
+  --buildtype=release \
+  --warning-level=2 \
+  -Dtests=true \
+  -Dwerror=false
+
+# Build with specific options
+cd build_meson
+ninja -C . --verbose
+```
+
+#### Meson vs CMake
+
+| Feature | CMake | Meson |
+|---------|-------|-------|
+| Build Speed | Standard | Faster |
+| Dependency Management | Manual | Automatic |
+| Configuration | Complex | Simple |
+| Cross-platform | Yes | Yes |
+| IDE Support | Excellent | Good |
 
 ## Running the Service
 
@@ -272,6 +339,36 @@ Connecting to server via Unix socket: unix:///tmp/image_service.sock
    Dimensions: 1920x1080
    Size: 39 bytes
    Content preview: DUMMY_JPEG_CONTENT_FOR_TESTING_PURPOSES...
+```
+
+## Testing
+
+### Test Segmentation API
+```bash
+./test_segmentation.sh
+```
+
+### Test Notification API
+```bash
+./test_notifications.sh
+```
+
+### Running Tests with Meson
+
+If you built the project with Meson, you can also run tests using Meson's test framework:
+
+```bash
+# Run all tests
+cd build_meson
+ninja test
+
+# Run specific tests
+meson test basic_functionality
+meson test segmentation_test
+meson test notification_test
+
+# Run tests with verbose output
+meson test --verbose
 ```
 
 ## Testing Multiple Clients

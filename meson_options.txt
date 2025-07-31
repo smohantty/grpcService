@@ -1,0 +1,13 @@
+option('buildtype', type : 'combo', choices : ['plain', 'debug', 'debugoptimized', 'release', 'minsize'], value : 'release', description : 'Build type to use')
+
+option('sanitize', type : 'combo', choices : ['none', 'address', 'thread', 'undefined', 'memory', 'leak'], value : 'none', description : 'Code sanitizer to use')
+
+option('coverage', type : 'boolean', value : false, description : 'Enable coverage tracking')
+
+option('tests', type : 'boolean', value : true, description : 'Build test executables')
+
+option('install_tests', type : 'boolean', value : false, description : 'Install test executables')
+
+option('warning_level', type : 'combo', choices : ['0', '1', '2', '3'], value : '2', description : 'Compiler warning level')
+
+option('werror', type : 'boolean', value : false, description : 'Treat warnings as errors')
