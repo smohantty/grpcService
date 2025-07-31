@@ -10,6 +10,7 @@
 #include <chrono>
 #include <iomanip>
 #include <atomic>
+#include <random>
 
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
@@ -19,10 +20,13 @@
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
+using grpc::ServerWriter;
 using grpc::Status;
 using imageservice::ImageService;
 using imageservice::GetImageRequest;
 using imageservice::ImageData;
+using imageservice::SegmentationRequest;
+using imageservice::SegmentationResult;
 
 // Global connection tracking
 class ConnectionTracker {
@@ -111,6 +115,111 @@ public:
         return Status::OK;
     }
 
+    Status doSegmentation(ServerContext* context, const SegmentationRequest* request,
+                         ServerWriter<SegmentationResult>* writer) override {
+        // Track connection
+        ConnectionTracker::getInstance().clientConnected();
+
+        // Get client information from metadata
+        std::string client_name = "unknown_client";
+        auto client_name_metadata = context->client_metadata().find("client-name");
+        if (client_name_metadata != context->client_metadata().end()) {
+            client_name = std::string(client_name_metadata->second.begin(), client_name_metadata->second.end());
+        }
+
+        std::cout << "[SEGMENTATION] Received segmentation request from: " << client_name << std::endl;
+        std::cout << "[SEGMENTATION] Image ID: " << request->image_id() << std::endl;
+        std::cout << "[SEGMENTATION] Type: " << request->segmentation_type() << std::endl;
+
+        // Generate a unique request ID
+        std::string request_id = generateRequestId();
+
+        // Check if the image exists
+        auto it = sample_images_.find(request->image_id());
+        if (it == sample_images_.end()) {
+            SegmentationResult error_result;
+            error_result.set_request_id(request_id);
+            error_result.set_status("failed");
+            error_result.set_error_message("Image not found: " + request->image_id());
+
+            writer->Write(error_result);
+            ConnectionTracker::getInstance().clientDisconnected();
+            return Status::OK;
+        }
+
+        // Send initial processing status
+        SegmentationResult processing_result;
+        processing_result.set_request_id(request_id);
+        processing_result.set_status("processing");
+        processing_result.set_result_format("PNG");
+
+        if (!writer->Write(processing_result)) {
+            std::cout << "[ERROR] Failed to send processing status to " << client_name << std::endl;
+            ConnectionTracker::getInstance().clientDisconnected();
+            return Status(grpc::StatusCode::INTERNAL, "Failed to send processing status");
+        }
+
+        std::cout << "[SEGMENTATION] Started processing for " << client_name << std::endl;
+
+        // Simulate segmentation processing with multiple steps
+        std::vector<std::string> steps = {"Loading image", "Preprocessing", "Feature extraction", "Segmentation", "Post-processing"};
+
+        for (size_t i = 0; i < steps.size(); ++i) {
+            // Simulate processing time
+            std::this_thread::sleep_for(std::chrono::milliseconds(500 + (i * 200)));
+
+            // Send progress update
+            SegmentationResult progress_result;
+            progress_result.set_request_id(request_id);
+            progress_result.set_status("processing");
+            progress_result.set_result_format("PNG");
+
+            // Add progress metrics
+            float progress = (float)(i + 1) / steps.size();
+            progress_result.mutable_metrics()->insert({"progress", progress});
+            progress_result.mutable_metrics()->insert({"current_step", i + 1});
+            progress_result.mutable_metrics()->insert({"total_steps", steps.size()});
+
+            if (!writer->Write(progress_result)) {
+                std::cout << "[ERROR] Failed to send progress update to " << client_name << std::endl;
+                ConnectionTracker::getInstance().clientDisconnected();
+                return Status(grpc::StatusCode::INTERNAL, "Failed to send progress update");
+            }
+
+            std::cout << "[SEGMENTATION] Progress for " << client_name << ": " << steps[i] << " (" << (progress * 100) << "%)" << std::endl;
+        }
+
+        // Generate segmented image content (simulated)
+        std::string original_content = it->second.image_content();
+        std::string segmented_content = "SEGMENTED_" + original_content + "_" + request->segmentation_type();
+
+        // Send final result
+        SegmentationResult final_result;
+        final_result.set_request_id(request_id);
+        final_result.set_status("completed");
+        final_result.set_segmented_image(segmented_content);
+        final_result.set_result_format("PNG");
+
+        // Add quality metrics
+        final_result.mutable_metrics()->insert({"accuracy", 0.95f});
+        final_result.mutable_metrics()->insert({"iou_score", 0.87f});
+        final_result.mutable_metrics()->insert({"processing_time_ms", 2000.0f});
+        final_result.mutable_metrics()->insert({"segments_count", 5.0f});
+
+        if (!writer->Write(final_result)) {
+            std::cout << "[ERROR] Failed to send final result to " << client_name << std::endl;
+            ConnectionTracker::getInstance().clientDisconnected();
+            return Status(grpc::StatusCode::INTERNAL, "Failed to send final result");
+        }
+
+        std::cout << "[SEGMENTATION] Completed segmentation for " << client_name
+                  << " (result size: " << segmented_content.size() << " bytes)" << std::endl;
+
+        // Track disconnection
+        ConnectionTracker::getInstance().clientDisconnected();
+        return Status::OK;
+    }
+
     // Method to get current connection statistics
     void PrintConnectionStats() const {
         std::cout << "[STATS] Current active connections: "
@@ -161,6 +270,25 @@ private:
         sample_images_["img003"] = image3;
 
         std::cout << "Initialized " << sample_images_.size() << " sample images" << std::endl;
+    }
+
+    std::string generateRequestId() {
+        static std::atomic<int> counter{0};
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> dis(1000, 9999);
+
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()) % 1000;
+
+        std::stringstream ss;
+        ss << "req_" << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
+           << "_" << std::setfill('0') << std::setw(3) << ms.count()
+           << "_" << dis(gen);
+
+        return ss.str();
     }
 
     std::unordered_map<std::string, ImageData> sample_images_;

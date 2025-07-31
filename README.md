@@ -4,11 +4,14 @@ A C++17 gRPC service that provides an image retrieval interface. The project inc
 
 ## Features
 
-- **gRPC Service Interface**: `GetImage()` method that returns `ImageData`
+- **gRPC Service Interface**:
+  - `GetImage()` method that returns `ImageData`
+  - `doSegmentation()` method with streaming callbacks for real-time progress updates
 - **Unix Domain Socket IPC**: Client and server communicate via Unix domain sockets for efficient local IPC
 - **Multi-client Support**: Server can handle multiple concurrent client connections
 - **C++17 Implementation**: Modern C++ with proper error handling
 - **Sample Data**: Pre-loaded with sample images for testing
+- **Real-time Callbacks**: Server-side streaming for segmentation progress updates
 
 ## Project Structure
 
@@ -18,6 +21,8 @@ grpcService/
 ├── image_server.cpp         # Server implementation
 ├── image_client.cpp         # Client implementation
 ├── CMakeLists.txt          # Build configuration
+├── build.sh                # Build script
+├── test_segmentation.sh    # Segmentation test script
 ├── README.md               # This file
 └── requirement.txt         # Original requirements
 ```
@@ -129,7 +134,9 @@ In another terminal, run the client:
 
 ## API Reference
 
-### ImageData Message
+### GetImage API
+
+#### ImageData Message
 
 The `ImageData` message contains the following fields:
 
@@ -141,6 +148,36 @@ The `ImageData` message contains the following fields:
 - `height` (int32): Image height in pixels
 - `size` (int64): Size of image data in bytes
 
+### doSegmentation API
+
+#### SegmentationRequest Message
+
+The `SegmentationRequest` message contains:
+
+- `image_id` (string): ID of the image to segment
+- `segmentation_type` (string): Type of segmentation (e.g., "object", "semantic", "instance")
+- `parameters` (map<string, string>): Optional parameters for segmentation
+
+#### SegmentationResult Message
+
+The `SegmentationResult` message contains:
+
+- `request_id` (string): Unique identifier for tracking the request
+- `status` (string): Current status ("processing", "completed", "failed")
+- `segmented_image` (bytes): The processed image data
+- `result_format` (string): Format of the segmented image
+- `metrics` (map<string, float>): Quality metrics for the segmentation
+- `error_message` (string): Error details if the operation fails
+
+#### Streaming Callback Flow
+
+The `doSegmentation` API uses server-side streaming to provide real-time updates:
+
+1. **Initial Response**: Server sends "processing" status with request ID
+2. **Progress Updates**: Multiple "processing" responses with progress metrics
+3. **Final Result**: "completed" status with segmented image and quality metrics
+4. **Error Handling**: "failed" status with error message if something goes wrong
+
 ### Available Sample Images
 
 The server comes pre-loaded with these sample images:
@@ -150,6 +187,25 @@ The server comes pre-loaded with these sample images:
 - `img003`: sample_image_3.gif (640x480 GIF)
 
 ## Example Usage
+
+### Segmentation Examples
+
+```bash
+# Perform object segmentation on img001
+./image_client --segmentation object img001
+
+# Perform semantic segmentation on img002
+./image_client --segmentation semantic img002
+
+# Perform instance segmentation on img003
+./image_client --segmentation instance img003
+
+# Test all segmentation types
+./image_client --test-segmentation
+
+# Run the comprehensive test script
+./test_segmentation.sh
+```
 
 ### Server Output
 ```

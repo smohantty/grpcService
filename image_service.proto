@@ -18,8 +18,28 @@ message GetImageRequest {
   string image_id = 1;
 }
 
+// Request message for segmentation
+message SegmentationRequest {
+  string image_id = 1;
+  string segmentation_type = 2;  // e.g., "object", "semantic", "instance"
+  map<string, string> parameters = 3;  // Additional parameters for segmentation
+}
+
+// Segmentation result message
+message SegmentationResult {
+  string request_id = 1;
+  string status = 2;  // "processing", "completed", "failed"
+  bytes segmented_image = 3;
+  string result_format = 4;
+  map<string, float> metrics = 5;  // Segmentation quality metrics
+  string error_message = 6;  // Only set if status is "failed"
+}
+
 // ImageService definition
 service ImageService {
   // GetImage RPC method that returns ImageData
   rpc GetImage(GetImageRequest) returns (ImageData);
+
+  // doSegmentation RPC method that returns results via streaming callback
+  rpc doSegmentation(SegmentationRequest) returns (stream SegmentationResult);
 }
