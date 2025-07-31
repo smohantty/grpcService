@@ -6,6 +6,10 @@
 #include <vector>
 #include <unordered_map>
 #include <unistd.h>
+#include <mutex>
+#include <chrono>
+#include <iomanip>
+#include <atomic>
 
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
@@ -20,6 +24,45 @@ using imageservice::ImageService;
 using imageservice::GetImageRequest;
 using imageservice::ImageData;
 
+// Global connection tracking
+class ConnectionTracker {
+public:
+    static ConnectionTracker& getInstance() {
+        static ConnectionTracker instance;
+        return instance;
+    }
+
+    void clientConnected() {
+        int current = active_connections_.fetch_add(1) + 1;
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::cout << "[CONNECTION] New client connected. Active connections: "
+                  << current << " at "
+                  << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S") << std::endl;
+    }
+
+    void clientDisconnected() {
+        int current = active_connections_.fetch_sub(1) - 1;
+        if (current < 0) {
+            active_connections_.store(0);
+            current = 0;
+        }
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::cout << "[CONNECTION] Client disconnected. Active connections: "
+                  << current << " at "
+                  << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S") << std::endl;
+    }
+
+    int getActiveConnections() const {
+        return active_connections_.load();
+    }
+
+private:
+    ConnectionTracker() = default;
+    std::atomic<int> active_connections_{0};
+};
+
 // Logic and data behind the server's behavior.
 class ImageServiceImpl final : public ImageService::Service {
 public:
@@ -30,22 +73,40 @@ public:
 
     Status GetImage(ServerContext* context, const GetImageRequest* request,
                    ImageData* reply) override {
-        std::cout << "Received GetImage request for image_id: " << request->image_id() << std::endl;
+        // Track connection (simplified approach)
+        ConnectionTracker::getInstance().clientConnected();
+
+        // Get client peer information
+        std::string peer = context->peer();
+        std::cout << "[REQUEST] Received GetImage request from: " << peer << std::endl;
+        std::cout << "[REQUEST] Request for image_id: " << request->image_id() << std::endl;
+        std::cout << "[STATUS] Active connections: " << ConnectionTracker::getInstance().getActiveConnections() << std::endl;
 
         // Find the requested image
         auto it = sample_images_.find(request->image_id());
         if (it == sample_images_.end()) {
-            std::cout << "Image not found: " << request->image_id() << std::endl;
+            std::cout << "[ERROR] Image not found: " << request->image_id() << std::endl;
+            // Track disconnection on error
+            ConnectionTracker::getInstance().clientDisconnected();
             return Status(grpc::StatusCode::NOT_FOUND, "Image not found");
         }
 
         // Set the reply with the found image data
         *reply = it->second;
 
-        std::cout << "Sending image: " << reply->image_name()
-                  << " (size: " << reply->size() << " bytes)" << std::endl;
+        std::cout << "[RESPONSE] Sending image: " << reply->image_name()
+                  << " (size: " << reply->size() << " bytes) to " << peer << std::endl;
+
+        // Track disconnection after successful response
+        ConnectionTracker::getInstance().clientDisconnected();
 
         return Status::OK;
+    }
+
+    // Method to get current connection statistics
+    void PrintConnectionStats() const {
+        std::cout << "[STATS] Current active connections: "
+                  << ConnectionTracker::getInstance().getActiveConnections() << std::endl;
     }
 
 private:
@@ -125,6 +186,16 @@ void RunServer() {
     std::cout << "ImageService server listening on Unix socket: " << server_address << std::endl;
     std::cout << "Available images: img001, img002, img003" << std::endl;
     std::cout << "Server supports multiple concurrent clients via Unix domain socket" << std::endl;
+    std::cout << "Connection tracking enabled - you'll see connection/disconnection events" << std::endl;
+
+    // Start a background thread to periodically print connection stats
+    std::thread stats_thread([&service]() {
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::seconds(30));
+            service.PrintConnectionStats();
+        }
+    });
+    stats_thread.detach();
 
     // Wait for the server to shutdown. Note that some other thread must be
     // responsible for shutting down the server for this call to ever return.
@@ -132,7 +203,7 @@ void RunServer() {
 }
 
 int main(int argc, char** argv) {
-    std::cout << "Starting ImageService gRPC Server..." << std::endl;
+    std::cout << "Starting ImageService gRPC Server with Connection Tracking..." << std::endl;
     RunServer();
     return 0;
 }
