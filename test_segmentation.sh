@@ -18,30 +18,30 @@ echo ""
 # Test 1: Basic segmentation
 echo "🔍 Test 1: Basic object segmentation"
 echo "----------------------------------------"
-./build/image_client --segmentation object img001
+./build/image_client --target localhost:50051 --segmentation object img001
 echo ""
 
 # Test 2: Different segmentation types
 echo "🔍 Test 2: Semantic segmentation"
 echo "----------------------------------------"
-./build/image_client --segmentation semantic img002
+./build/image_client --target localhost:50051 --segmentation semantic img002
 echo ""
 
 echo "🔍 Test 3: Instance segmentation"
 echo "----------------------------------------"
-./build/image_client --segmentation instance img003
+./build/image_client --target localhost:50051 --segmentation instance img003
 echo ""
 
 # Test 3: Error case (non-existent image)
 echo "🔍 Test 4: Error case - non-existent image"
 echo "----------------------------------------"
-./build/image_client --segmentation object img999
+./build/image_client --target localhost:50051 --segmentation object img999
 echo ""
 
 # Test 4: Run all segmentation tests
 echo "🔍 Test 5: Running all segmentation tests"
 echo "----------------------------------------"
-./build/image_client --test-segmentation
+./build/image_client --target localhost:50051 --test-segmentation
 echo ""
 
 echo "✅ All segmentation tests completed!"

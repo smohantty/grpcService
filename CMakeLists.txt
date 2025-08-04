@@ -69,7 +69,8 @@ target_link_libraries(image_service_proto
 
 # Server executable
 add_executable(image_server
-    image_server.cpp)
+    image_server.cpp
+    ImageServiceAgent.cpp)
 
 target_link_libraries(image_server
     image_service_proto
