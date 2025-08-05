@@ -5,6 +5,7 @@
 #include <chrono>
 #include <atomic>
 #include <signal.h>
+#include <unistd.h>
 
 #include "ImageServiceAgent.h"
 
@@ -17,6 +18,11 @@ std::atomic<bool> g_shutdown_requested(false);
 void signalHandler(int signal) {
     std::cout << "\n[SHUTDOWN] Received signal " << signal << ", shutting down gracefully..." << std::endl;
     g_shutdown_requested = true;
+
+    // Clean up Unix socket
+    if (unlink("/tmp/image_service.sock") == 0) {
+        std::cout << "[SHUTDOWN] Unix socket cleaned up" << std::endl;
+    }
 }
 
 // Segmentation processor that handles the actual segmentation work
@@ -133,6 +139,11 @@ public:
 
     ~VisionApp() {
         std::cout << "[VISION_APP] VisionApp shutting down..." << std::endl;
+
+        // Clean up Unix socket
+        if (unlink("/tmp/image_service.sock") == 0) {
+            std::cout << "[VISION_APP] Unix socket cleaned up in destructor" << std::endl;
+        }
     }
 
     // Method to get the agent if needed for external operations

@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <deque>
 #include <chrono>
+#include <unistd.h>
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -47,7 +48,7 @@ public:
 private:
     void startServer() {
         server_thread_ = std::thread([this]() {
-            std::string server_address("0.0.0.0:50051");
+            std::string server_address("unix:///tmp/image_service.sock"); // Unix socket path
 
             // Create service implementation
             auto service = std::make_unique<ImageServiceImpl>(this);
@@ -72,6 +73,12 @@ private:
     void stopServer() {
         stop_server_ = true;
         segmentation_results_cv_.notify_all();
+
+        // Clean up Unix socket
+        if (unlink("/tmp/image_service.sock") == 0) {
+            std::cout << "[AGENT] Unix socket cleaned up" << std::endl;
+        }
+
         if (server_thread_.joinable()) {
             server_thread_.join();
         }

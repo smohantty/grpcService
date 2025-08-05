@@ -22,19 +22,19 @@ echo ""
 
 # Test 1: Single client request
 echo "🔍 Test 1: Single client request"
-./build/image_client unix:///tmp/image_service.sock img001
+./build/image_client --target unix:///tmp/image_service.sock img001
 echo ""
 
 # Test 2: Multiple requests
 echo "🔍 Test 2: Multiple requests"
-./build/image_client unix:///tmp/image_service.sock img002 &
-./build/image_client unix:///tmp/image_service.sock img003 &
+./build/image_client --target unix:///tmp/image_service.sock img002 &
+./build/image_client --target unix:///tmp/image_service.sock img003 &
 wait
 echo ""
 
 # Test 3: Invalid request
 echo "🔍 Test 3: Invalid request (should show error)"
-./build/image_client unix:///tmp/image_service.sock img999
+./build/image_client --target unix:///tmp/image_service.sock img999
 echo ""
 
 # Wait a bit for any pending operations
@@ -52,4 +52,4 @@ kill $SERVER_PID 2>/dev/null
 rm -f server_output.log
 rm -f /tmp/image_service.sock
 
-echo "✅ Test completed!" 
+echo "✅ Test completed!"

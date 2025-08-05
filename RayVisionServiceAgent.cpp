@@ -8,6 +8,7 @@
 #include <atomic>
 #include <mutex>
 #include <set>
+#include <unistd.h>
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -79,7 +80,7 @@ public:
 private:
     void startServer() {
         server_thread_ = std::thread([this]() {
-            std::string server_address("0.0.0.0:50052"); // Different port from ImageService
+            std::string server_address("unix:///tmp/rayvision_service.sock"); // Unix socket path
 
             // Create service implementation
             auto service = std::make_unique<RayVisionServiceImpl>(this);
@@ -106,6 +107,11 @@ private:
 
     void stopServer() {
         stop_server_ = true;
+
+        // Clean up Unix socket
+        if (unlink("/tmp/rayvision_service.sock") == 0) {
+            std::cout << "[RAYVISION] Unix socket cleaned up" << std::endl;
+        }
 
         // Shutdown the server
         {

@@ -71,7 +71,7 @@ private:
 };
 
 int main() {
-    std::string target_address("localhost:50052");
+    std::string target_address("unix:///tmp/rayvision_service.sock");
     auto channel = grpc::CreateChannel(target_address, grpc::InsecureChannelCredentials());
     RayVisionClient client(channel);
 
