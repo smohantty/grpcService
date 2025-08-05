@@ -34,7 +34,7 @@ private:
 
 public:
     Impl(std::weak_ptr<IRayVisionServiceListener> listener)
-        : listener_(listener), stop_server_(false) {
+        : mListener(listener), mStopServer(false) {
         startServer();
     }
 
@@ -48,8 +48,8 @@ public:
                   << segmentation_result.segments.size() << " segments" << std::endl;
 
         // Send the result to any waiting clients
-        std::lock_guard<std::mutex> lock(segmentation_reactors_mutex_);
-        for (auto* reactor_ptr : active_segmentation_reactors_) {
+        std::lock_guard<std::mutex> lock(mSegmentationReactorsMutex);
+        for (auto* reactor_ptr : mActiveSegmentationReactors) {
             auto* reactor = static_cast<DoSegmentationReactor*>(reactor_ptr);
             if (reactor && !reactor->IsFinished()) {
                 // Convert to gRPC response
@@ -68,18 +68,18 @@ public:
     }
 
     void registerSegmentationReactor(DoSegmentationReactor* reactor) {
-        std::lock_guard<std::mutex> lock(segmentation_reactors_mutex_);
-        active_segmentation_reactors_.insert(static_cast<void*>(reactor));
+        std::lock_guard<std::mutex> lock(mSegmentationReactorsMutex);
+        mActiveSegmentationReactors.insert(static_cast<void*>(reactor));
     }
 
     void unregisterSegmentationReactor(DoSegmentationReactor* reactor) {
-        std::lock_guard<std::mutex> lock(segmentation_reactors_mutex_);
-        active_segmentation_reactors_.erase(static_cast<void*>(reactor));
+        std::lock_guard<std::mutex> lock(mSegmentationReactorsMutex);
+        mActiveSegmentationReactors.erase(static_cast<void*>(reactor));
     }
 
 private:
     void startServer() {
-        server_thread_ = std::thread([this]() {
+        mServerThread = std::thread([this]() {
             std::string server_address("unix:///tmp/rayvision_service.sock"); // Unix socket path
 
             // Create service implementation
@@ -95,18 +95,18 @@ private:
 
             // Build and start server
             {
-                std::lock_guard<std::mutex> lock(server_mutex_);
-                server_ = builder.BuildAndStart();
+                std::lock_guard<std::mutex> lock(mServerMutex);
+                mServer = builder.BuildAndStart();
             }
             std::cout << "[RAYVISION] RayVisionServiceAgent server listening on " << server_address << std::endl;
 
             // Wait for server to shutdown
-            server_->Wait();
+            mServer->Wait();
         });
     }
 
     void stopServer() {
-        stop_server_ = true;
+        mStopServer = true;
 
         // Clean up Unix socket
         if (unlink("/tmp/rayvision_service.sock") == 0) {
@@ -115,21 +115,21 @@ private:
 
         // Shutdown the server
         {
-            std::lock_guard<std::mutex> lock(server_mutex_);
-            if (server_) {
+            std::lock_guard<std::mutex> lock(mServerMutex);
+            if (mServer) {
                 std::cout << "[RAYVISION] Shutting down server..." << std::endl;
-                server_->Shutdown();
+                mServer->Shutdown();
             }
         }
 
-        if (server_thread_.joinable()) {
-            server_thread_.join();
+        if (mServerThread.joinable()) {
+            mServerThread.join();
         }
 
         // Clear server reference
         {
-            std::lock_guard<std::mutex> lock(server_mutex_);
-            server_.reset();
+            std::lock_guard<std::mutex> lock(mServerMutex);
+            mServer.reset();
         }
     }
 
@@ -145,7 +145,7 @@ private:
         void StartProcessing() {
             // Process the request asynchronously
             try {
-                auto listener = agent_impl_->listener_.lock();
+                auto listener = agent_impl_->mListener.lock();
                 if (!listener) {
                     response_->set_width(0);
                     response_->set_height(0);
@@ -200,12 +200,12 @@ private:
 
         void StartProcessing() {
             // Check if server is shutting down
-            if (agent_impl_->stop_server_) {
+            if (agent_impl_->mStopServer) {
                 Finish(grpc::Status(grpc::StatusCode::CANCELLED, "Server shutting down"));
                 return;
             }
 
-            auto listener = agent_impl_->listener_.lock();
+            auto listener = agent_impl_->mListener.lock();
             if (!listener) {
                 Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Listener not available"));
                 return;
@@ -272,13 +272,13 @@ private:
         Impl* agent_impl_;
     };
 
-    std::weak_ptr<IRayVisionServiceListener> listener_;
-    std::thread server_thread_;
-    std::atomic<bool> stop_server_;
-    std::unique_ptr<Server> server_; // Store server reference for shutdown
-    std::mutex server_mutex_; // Protect server access
-    std::mutex segmentation_reactors_mutex_; // Protect active segmentation reactors
-            std::set<void*> active_segmentation_reactors_; // Track active segmentation requests
+    std::weak_ptr<IRayVisionServiceListener> mListener;
+    std::thread mServerThread;
+    std::atomic<bool> mStopServer;
+    std::unique_ptr<Server> mServer; // Store server reference for shutdown
+    std::mutex mServerMutex; // Protect server access
+    std::mutex mSegmentationReactorsMutex; // Protect active segmentation reactors
+            std::set<void*> mActiveSegmentationReactors; // Track active segmentation requests
 };
 
 // Public interface implementation
