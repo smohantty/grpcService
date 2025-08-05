@@ -19,23 +19,9 @@ public:
         return image_data;
     }
 
-    rayvision::SegmentationResult onDoSegmentation() override {
+    void onDoSegmentation() override {
         std::cout << "[LISTENER] Performing segmentation" << std::endl;
 
-        // Simulate segmentation result
-        rayvision::SegmentationResult result;
-
-        // Add some dummy segments
-        for (int i = 0; i < 3; ++i) {
-            rayvision::ImageData segment;
-            segment.width = 640;
-            segment.height = 480;
-            segment.colorspace = 0; // RGB
-            segment.buffer = "segment_" + std::to_string(i);
-            result.segments.push_back(segment);
-        }
-
-        return result;
     }
 };
 

@@ -22,7 +22,7 @@ public:
     public:
         virtual ~IRayVisionServiceListener() = default;
         virtual ImageData onGetImage(int cameraType) = 0; // 1 = HEAD, 2 = BODY, 3 = IR
-        virtual SegmentationResult onDoSegmentation() = 0; // Notify segmentation request
+        virtual void onDoSegmentation() = 0; // Notify segmentation request
     };
 
     RayVisionServiceAgent(std::weak_ptr<IRayVisionServiceListener> listener);
