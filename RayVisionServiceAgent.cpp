@@ -7,15 +7,15 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <condition_variable>
-#include <deque>
-#include <chrono>
 
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
+using grpc::CallbackServerContext;
 using grpc::ServerWriter;
 using grpc::Status;
+using grpc::ServerUnaryReactor;
+using grpc::ServerWriteReactor;
 using rayvisiongrpc::RayVisionGrpc;
 using rayvisiongrpc::GetImageRequest;
 using rayvisiongrpc::ImageData;
@@ -37,9 +37,12 @@ public:
     }
 
     void sendSegmentationResult(const rayvision::SegmentationResult& segmentation_result) {
-        std::lock_guard<std::mutex> lock(segmentation_results_mutex_);
-        pending_segmentation_results_.push_back(segmentation_result);
-        segmentation_results_cv_.notify_one();
+        // Process the result immediately using gRPC's thread pool
+        std::cout << "[RAYVISION] Processing segmentation result with "
+                  << segmentation_result.segments.size() << " segments" << std::endl;
+
+        // Here you can add any additional processing logic
+        // For example, sending to connected clients, logging, etc.
     }
 
 private:
@@ -72,7 +75,6 @@ private:
 
     void stopServer() {
         stop_server_ = true;
-        segmentation_results_cv_.notify_all();
 
         // Shutdown the server
         {
@@ -95,57 +97,89 @@ private:
     }
 
     // gRPC Service Implementation
-    class RayVisionServiceImpl final : public RayVisionGrpc::Service {
+    class GetImageReactor : public grpc::ServerUnaryReactor {
     public:
-        RayVisionServiceImpl(Impl* agent_impl) : agent_impl_(agent_impl) {}
+        GetImageReactor(Impl* agent_impl, const GetImageRequest* request, rayvisiongrpc::ImageData* response)
+            : agent_impl_(agent_impl), request_(request), response_(response) {
+            // Start processing in background
+            StartProcessing();
+        }
 
-        Status GetImage(ServerContext* context, const GetImageRequest* request,
-                       rayvisiongrpc::ImageData* response) override {
-            std::cout << "[RAYVISION] GetImage request received for camera type: " << request->type() << std::endl;
-
-            auto listener = agent_impl_->listener_.lock();
-            if (!listener) {
-                response->set_width(0);
-                response->set_height(0);
-                response->set_colorspace(rayvisiongrpc::ColorSpace::RGB);
-                response->set_buffer("");
-                return Status(grpc::StatusCode::INTERNAL, "Listener not available");
-            }
-
+        void StartProcessing() {
+            // Process the request asynchronously
             try {
+                auto listener = agent_impl_->listener_.lock();
+                if (!listener) {
+                    response_->set_width(0);
+                    response_->set_height(0);
+                    response_->set_colorspace(rayvisiongrpc::ColorSpace::RGB);
+                    response_->set_buffer("");
+                    Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Listener not available"));
+                    return;
+                }
+
                 // Call listener to get image data
-                auto image_data = listener->onGetImage(request->type());
+                auto image_data = listener->onGetImage(request_->type());
 
                 // Convert to gRPC response
-                response->set_width(image_data.width);
-                response->set_height(image_data.height);
-                response->set_colorspace(static_cast<rayvisiongrpc::ColorSpace>(image_data.colorspace));
-                response->set_buffer(image_data.buffer);
+                response_->set_width(image_data.width);
+                response_->set_height(image_data.height);
+                response_->set_colorspace(static_cast<rayvisiongrpc::ColorSpace>(image_data.colorspace));
+                response_->set_buffer(image_data.buffer);
 
-                std::cout << "[RAYVISION] GetImage response prepared (size: " << response->buffer().size() << " bytes)" << std::endl;
-                return Status::OK;
+                std::cout << "[RAYVISION] GetImage response prepared (size: " << response_->buffer().size() << " bytes)" << std::endl;
+                Finish(grpc::Status::OK);
             } catch (const std::exception& e) {
                 std::cerr << "[RAYVISION] GetImage error: " << e.what() << std::endl;
-                response->set_width(0);
-                response->set_height(0);
-                response->set_colorspace(rayvisiongrpc::ColorSpace::RGB);
-                response->set_buffer("");
-                return Status(grpc::StatusCode::INTERNAL, "Failed to get image: " + std::string(e.what()));
+                response_->set_width(0);
+                response_->set_height(0);
+                response_->set_colorspace(rayvisiongrpc::ColorSpace::RGB);
+                response_->set_buffer("");
+                Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to get image: " + std::string(e.what())));
             }
         }
 
-        Status doSegmentation(ServerContext* context, const rayvisiongrpc::Empty* request,
-                             ServerWriter<rayvisiongrpc::SegmentationResult>* writer) override {
-            std::cout << "[RAYVISION] doSegmentation request received" << std::endl;
+        void OnDone() override {
+            // Cleanup when the reactor is done
+            delete this;
+        }
+
+    private:
+        Impl* agent_impl_;
+        const GetImageRequest* request_;
+        rayvisiongrpc::ImageData* response_;
+    };
+
+    class DoSegmentationReactor : public grpc::ServerWriteReactor<rayvisiongrpc::SegmentationResult> {
+    public:
+        DoSegmentationReactor(Impl* agent_impl, const rayvisiongrpc::Empty* request)
+            : agent_impl_(agent_impl), request_(request) {
+            // Start processing in background
+            StartProcessing();
+        }
+
+        void StartProcessing() {
+            // Check if server is shutting down
+            if (agent_impl_->stop_server_) {
+                Finish(grpc::Status(grpc::StatusCode::CANCELLED, "Server shutting down"));
+                return;
+            }
 
             auto listener = agent_impl_->listener_.lock();
             if (!listener) {
-                return Status(grpc::StatusCode::INTERNAL, "Listener not available");
+                Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Listener not available"));
+                return;
             }
 
             try {
                 // Call listener to perform segmentation
                 auto segmentation_result = listener->onDoSegmentation();
+
+                // Check again if server is shutting down before writing response
+                if (agent_impl_->stop_server_) {
+                    Finish(grpc::Status(grpc::StatusCode::CANCELLED, "Server shutting down"));
+                    return;
+                }
 
                 // Convert to gRPC response
                 rayvisiongrpc::SegmentationResult grpc_result;
@@ -157,16 +191,47 @@ private:
                     grpc_segment->set_buffer(segment.buffer);
                 }
 
-                if (!writer->Write(grpc_result)) {
-                    return Status(grpc::StatusCode::INTERNAL, "Failed to write segmentation result");
-                }
-
-                std::cout << "[RAYVISION] Segmentation result sent successfully" << std::endl;
-                return Status::OK;
+                StartWrite(&grpc_result);
             } catch (const std::exception& e) {
                 std::cerr << "[RAYVISION] Segmentation error: " << e.what() << std::endl;
-                return Status(grpc::StatusCode::INTERNAL, "Segmentation failed: " + std::string(e.what()));
+                Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Segmentation failed: " + std::string(e.what())));
             }
+        }
+
+        void OnDone() override {
+            // Cleanup when the reactor is done
+            delete this;
+        }
+
+        void OnWriteDone(bool ok) override {
+            if (ok) {
+                std::cout << "[RAYVISION] Segmentation result sent successfully" << std::endl;
+                Finish(grpc::Status::OK);
+            } else {
+                Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to write segmentation result"));
+            }
+        }
+
+    private:
+        Impl* agent_impl_;
+        const rayvisiongrpc::Empty* request_;
+    };
+
+    class RayVisionServiceImpl final : public RayVisionGrpc::CallbackService {
+    public:
+        RayVisionServiceImpl(Impl* agent_impl) : agent_impl_(agent_impl) {}
+
+                ServerUnaryReactor* GetImage(CallbackServerContext* context, const GetImageRequest* request,
+                       rayvisiongrpc::ImageData* response) override {
+            std::cout << "[RAYVISION] GetImage request received for camera type: " << request->type() << std::endl;
+
+            return new GetImageReactor(agent_impl_, request, response);
+        }
+
+                ServerWriteReactor<rayvisiongrpc::SegmentationResult>* doSegmentation(CallbackServerContext* context, const rayvisiongrpc::Empty* request) override {
+            std::cout << "[RAYVISION] doSegmentation request received" << std::endl;
+
+            return new DoSegmentationReactor(agent_impl_, request);
         }
 
     private:
@@ -178,11 +243,6 @@ private:
     std::atomic<bool> stop_server_;
     std::unique_ptr<Server> server_; // Store server reference for shutdown
     std::mutex server_mutex_; // Protect server access
-
-    // Segmentation results queue
-    std::mutex segmentation_results_mutex_;
-    std::condition_variable segmentation_results_cv_;
-    std::deque<rayvision::SegmentationResult> pending_segmentation_results_;
 };
 
 // Public interface implementation
