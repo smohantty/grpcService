@@ -7,6 +7,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <set>
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -26,6 +27,10 @@ using rayvisiongrpc::ColorSpace;
 namespace rayvision {
 
 class RayVisionServiceAgent::Impl {
+private:
+    // Forward declaration of nested class
+    class DoSegmentationReactor;
+
 public:
     Impl(std::weak_ptr<IRayVisionServiceListener> listener)
         : listener_(listener), stop_server_(false) {
@@ -41,8 +46,34 @@ public:
         std::cout << "[RAYVISION] Processing segmentation result with "
                   << segmentation_result.segments.size() << " segments" << std::endl;
 
-        // Here you can add any additional processing logic
-        // For example, sending to connected clients, logging, etc.
+        // Send the result to any waiting clients
+        std::lock_guard<std::mutex> lock(segmentation_reactors_mutex_);
+        for (auto* reactor_ptr : active_segmentation_reactors_) {
+            auto* reactor = static_cast<DoSegmentationReactor*>(reactor_ptr);
+            if (reactor && !reactor->IsFinished()) {
+                // Convert to gRPC response
+                rayvisiongrpc::SegmentationResult grpc_result;
+                for (const auto& segment : segmentation_result.segments) {
+                    auto* grpc_segment = grpc_result.add_segments();
+                    grpc_segment->set_width(segment.width);
+                    grpc_segment->set_height(segment.height);
+                    grpc_segment->set_colorspace(static_cast<rayvisiongrpc::ColorSpace>(segment.colorspace));
+                    grpc_segment->set_buffer(segment.buffer);
+                }
+
+                reactor->StartWrite(&grpc_result);
+            }
+        }
+    }
+
+    void registerSegmentationReactor(DoSegmentationReactor* reactor) {
+        std::lock_guard<std::mutex> lock(segmentation_reactors_mutex_);
+        active_segmentation_reactors_.insert(static_cast<void*>(reactor));
+    }
+
+    void unregisterSegmentationReactor(DoSegmentationReactor* reactor) {
+        std::lock_guard<std::mutex> lock(segmentation_reactors_mutex_);
+        active_segmentation_reactors_.erase(static_cast<void*>(reactor));
     }
 
 private:
@@ -153,7 +184,10 @@ private:
     class DoSegmentationReactor : public grpc::ServerWriteReactor<rayvisiongrpc::SegmentationResult> {
     public:
         DoSegmentationReactor(Impl* agent_impl, const rayvisiongrpc::Empty* request)
-            : agent_impl_(agent_impl), request_(request) {
+            : agent_impl_(agent_impl), request_(request), finished_(false) {
+            // Register this reactor with the agent
+            agent_impl_->registerSegmentationReactor(this);
+
             // Start processing in background
             StartProcessing();
         }
@@ -172,26 +206,15 @@ private:
             }
 
             try {
-                // Call listener to perform segmentation
-                auto segmentation_result = listener->onDoSegmentation();
+                // Notify the listener about the segmentation request
+                // The listener should process this asynchronously and call sendSegmentationResult when ready
+                listener->onDoSegmentation();
 
-                // Check again if server is shutting down before writing response
-                if (agent_impl_->stop_server_) {
-                    Finish(grpc::Status(grpc::StatusCode::CANCELLED, "Server shutting down"));
-                    return;
-                }
+                std::cout << "[RAYVISION] Segmentation request notified to listener" << std::endl;
 
-                // Convert to gRPC response
-                rayvisiongrpc::SegmentationResult grpc_result;
-                for (const auto& segment : segmentation_result.segments) {
-                    auto* grpc_segment = grpc_result.add_segments();
-                    grpc_segment->set_width(segment.width);
-                    grpc_segment->set_height(segment.height);
-                    grpc_segment->set_colorspace(static_cast<rayvisiongrpc::ColorSpace>(segment.colorspace));
-                    grpc_segment->set_buffer(segment.buffer);
-                }
+                // Don't finish here - wait for sendSegmentationResult to be called
+                // The reactor will stay active until the result is ready
 
-                StartWrite(&grpc_result);
             } catch (const std::exception& e) {
                 std::cerr << "[RAYVISION] Segmentation error: " << e.what() << std::endl;
                 Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Segmentation failed: " + std::string(e.what())));
@@ -200,21 +223,26 @@ private:
 
         void OnDone() override {
             // Cleanup when the reactor is done
+            agent_impl_->unregisterSegmentationReactor(this);
             delete this;
         }
 
         void OnWriteDone(bool ok) override {
             if (ok) {
                 std::cout << "[RAYVISION] Segmentation result sent successfully" << std::endl;
+                finished_ = true;
                 Finish(grpc::Status::OK);
             } else {
                 Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to write segmentation result"));
             }
         }
 
+        bool IsFinished() const { return finished_; }
+
     private:
         Impl* agent_impl_;
         const rayvisiongrpc::Empty* request_;
+        bool finished_;
     };
 
     class RayVisionServiceImpl final : public RayVisionGrpc::CallbackService {
@@ -243,6 +271,8 @@ private:
     std::atomic<bool> stop_server_;
     std::unique_ptr<Server> server_; // Store server reference for shutdown
     std::mutex server_mutex_; // Protect server access
+    std::mutex segmentation_reactors_mutex_; // Protect active segmentation reactors
+            std::set<void*> active_segmentation_reactors_; // Track active segmentation requests
 };
 
 // Public interface implementation
