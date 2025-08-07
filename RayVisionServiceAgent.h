@@ -25,7 +25,7 @@ public:
         virtual void onDoSegmentation() = 0; // Notify segmentation request
     };
 
-    RayVisionServiceAgent(std::weak_ptr<IRayVisionServiceListener> listener);
+    RayVisionServiceAgent(std::weak_ptr<IRayVisionServiceListener> listener, int port = 50052);
     ~RayVisionServiceAgent();
 
     void sendSegmentationResult(const SegmentationResult& segmentation_result);

@@ -70,8 +70,21 @@ private:
     std::unique_ptr<RayVisionGrpc::Stub> stub_;
 };
 
-int main() {
-    std::string target_address("unix:///tmp/rayvision_service.sock");
+int main(int argc, char** argv) {
+    // Default port for RayVision service
+    int port = 50052;
+
+    // Parse command line arguments for port
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--port" && i + 1 < argc) {
+            port = std::stoi(argv[++i]);
+        }
+    }
+
+    std::string target_address = "localhost:" + std::to_string(port);
+    std::cout << "Connecting to RayVision service on " << target_address << std::endl;
+
     auto channel = grpc::CreateChannel(target_address, grpc::InsecureChannelCredentials());
     RayVisionClient client(channel);
 

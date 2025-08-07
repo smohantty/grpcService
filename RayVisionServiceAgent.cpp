@@ -33,8 +33,8 @@ private:
     class DoSegmentationReactor;
 
 public:
-    Impl(std::weak_ptr<IRayVisionServiceListener> listener)
-        : mListener(listener), mStopServer(false) {
+    Impl(std::weak_ptr<IRayVisionServiceListener> listener, int port)
+        : mListener(listener), mStopServer(false), mPort(port) {
         startServer();
     }
 
@@ -80,7 +80,7 @@ public:
 private:
     void startServer() {
         mServerThread = std::thread([this]() {
-            std::string server_address("unix:///tmp/rayvision_service.sock"); // Unix socket path
+            std::string server_address = "0.0.0.0:" + std::to_string(mPort); // TCP address and port
 
             // Create service implementation
             auto service = std::make_unique<RayVisionServiceImpl>(this);
@@ -107,11 +107,6 @@ private:
 
     void stopServer() {
         mStopServer = true;
-
-        // Clean up Unix socket
-        if (unlink("/tmp/rayvision_service.sock") == 0) {
-            std::cout << "[RAYVISION] Unix socket cleaned up" << std::endl;
-        }
 
         // Shutdown the server
         {
@@ -275,6 +270,7 @@ private:
     std::weak_ptr<IRayVisionServiceListener> mListener;
     std::thread mServerThread;
     std::atomic<bool> mStopServer;
+    int mPort; // Server port
     std::unique_ptr<Server> mServer; // Store server reference for shutdown
     std::mutex mServerMutex; // Protect server access
     std::mutex mSegmentationReactorsMutex; // Protect active segmentation reactors
@@ -282,9 +278,9 @@ private:
 };
 
 // Public interface implementation
-RayVisionServiceAgent::RayVisionServiceAgent(std::weak_ptr<IRayVisionServiceListener> listener)
-    : mImpl(std::make_unique<Impl>(listener)) {
-    std::cout << "[RAYVISION] RayVisionServiceAgent created" << std::endl;
+RayVisionServiceAgent::RayVisionServiceAgent(std::weak_ptr<IRayVisionServiceListener> listener, int port)
+    : mImpl(std::make_unique<Impl>(listener, port)) {
+    std::cout << "[RAYVISION] RayVisionServiceAgent created on port " << port << std::endl;
 }
 
 RayVisionServiceAgent::~RayVisionServiceAgent() {

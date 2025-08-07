@@ -14,11 +14,6 @@ std::atomic<bool> g_shutdown_requested(false);
 void signalHandler(int signal) {
     std::cout << "\n[SHUTDOWN] Received signal " << signal << ", shutting down gracefully..." << std::endl;
     g_shutdown_requested = true;
-
-    // Clean up Unix socket
-    if (unlink("/tmp/rayvision_service.sock") == 0) {
-        std::cout << "[SHUTDOWN] Unix socket cleaned up" << std::endl;
-    }
 }
 
 class RayVisionListener : public rayvision::RayVisionServiceAgent::IRayVisionServiceListener {
@@ -42,17 +37,28 @@ public:
     }
 };
 
-int main() {
-    std::cout << "[MAIN] Starting RayVision Service" << std::endl;
+int main(int argc, char** argv) {
+    // Default port for RayVision service
+    int port = 50052;
+
+    // Parse command line arguments for port
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--port" && i + 1 < argc) {
+            port = std::stoi(argv[++i]);
+        }
+    }
+
+    std::cout << "[MAIN] Starting RayVision Service on port " << port << std::endl;
 
     // Set up signal handlers for graceful shutdown
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
     auto listener = std::make_shared<RayVisionListener>();
-    rayvision::RayVisionServiceAgent agent(listener);
+    rayvision::RayVisionServiceAgent agent(listener, port);
 
-    std::cout << "[MAIN] RayVision Service started. Press Ctrl+C to exit..." << std::endl;
+    std::cout << "[MAIN] RayVision Service started on port " << port << ". Press Ctrl+C to exit..." << std::endl;
 
     // Keep the server running until shutdown is requested
     while (!g_shutdown_requested) {
@@ -60,11 +66,6 @@ int main() {
     }
 
     std::cout << "[MAIN] Shutting down RayVision Service" << std::endl;
-
-    // Clean up Unix socket
-    if (unlink("/tmp/rayvision_service.sock") == 0) {
-        std::cout << "[MAIN] Unix socket cleaned up" << std::endl;
-    }
 
     return 0;
 }
