@@ -9,6 +9,11 @@
 #include <mutex>
 #include <set>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/xattr.h>
+#include <cstring>
+#include <cerrno>
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -81,6 +86,10 @@ private:
     void startServer() {
         mServerThread = std::thread([this]() {
             std::string server_address("unix:///tmp/rayvision_service.sock"); // Unix socket path
+            std::string socket_path("/tmp/rayvision_service.sock");
+
+            // Clean up any existing socket first
+            unlink(socket_path.c_str());
 
             // Create service implementation
             auto service = std::make_unique<RayVisionServiceImpl>(this);
@@ -98,10 +107,33 @@ private:
                 std::lock_guard<std::mutex> lock(mServerMutex);
                 mServer = builder.BuildAndStart();
             }
-            std::cout << "[RAYVISION] RayVisionServiceAgent server listening on " << server_address << std::endl;
 
-            // Wait for server to shutdown
-            mServer->Wait();
+            if (mServer) {
+                // Set socket permissions to allow all users to connect
+                if (chmod(socket_path.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) == 0) {
+                    std::cout << "[RAYVISION] Socket permissions set to 777" << std::endl;
+                } else {
+                    std::cerr << "[RAYVISION] Warning: Failed to set socket permissions: " << strerror(errno) << std::endl;
+                }
+
+                // Set SMACK label for Tizen using file attributes
+                // This is the proper way to set SMACK labels in Tizen
+                const char* smack_label = "_";
+                if (setxattr(socket_path.c_str(), "security.SMACK64", smack_label, strlen(smack_label), 0) == 0) {
+                    std::cout << "[RAYVISION] SMACK label set to: " << smack_label << std::endl;
+                } else {
+                    std::cerr << "[RAYVISION] Warning: Failed to set SMACK label: " << strerror(errno) << std::endl;
+                    std::cerr << "[RAYVISION] This is normal if SMACK is not enabled or not available" << std::endl;
+                }
+
+                std::cout << "[RAYVISION] RayVisionServiceAgent server listening on " << server_address << std::endl;
+                std::cout << "[RAYVISION] Socket path: " << socket_path << " with permissions 777" << std::endl;
+
+                // Wait for server to shutdown
+                mServer->Wait();
+            } else {
+                std::cerr << "[RAYVISION] Failed to start server" << std::endl;
+            }
         });
     }
 
