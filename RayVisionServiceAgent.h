@@ -9,11 +9,19 @@ struct ImageData {
     int width;
     int height;
     int colorspace; // 1 = RGB, 2 = GRAY
-    std::string buffer;
+    std::vector<std::byte> buffer;
+};
+
+struct SegmentData {
+    int left;
+    int top;
+    int right;
+    int bottom;
+    ImageData image;
 };
 
 struct SegmentationResult {
-    std::vector<ImageData> segments;
+    std::vector<std::unique_ptr<SegmentData>> segments;
 };
 
 class RayVisionServiceAgent {

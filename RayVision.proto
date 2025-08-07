@@ -28,9 +28,17 @@ message GetImageRequest {
 message Empty {
 }
 
+message SegmentData {
+  int32 left = 1;
+  int32 top = 2;
+  int32 right = 3;
+  int32 bottom = 4;
+  ImageData image = 5;
+}
+
 // Segmentation result message
 message SegmentationResult {
-    repeated ImageData segments = 1;
+    repeated SegmentData segments = 1;
 }
 
 

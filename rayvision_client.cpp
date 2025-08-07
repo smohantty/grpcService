@@ -53,10 +53,11 @@ public:
             for (int i = 0; i < response.segments_size(); ++i) {
                 const auto& segment = response.segments(i);
                 std::cout << "  Segment " << i << ":" << std::endl;
-                std::cout << "    Width: " << segment.width() << std::endl;
-                std::cout << "    Height: " << segment.height() << std::endl;
-                std::cout << "    Colorspace: " << segment.colorspace() << std::endl;
-                std::cout << "    Buffer size: " << segment.buffer().size() << " bytes" << std::endl;
+                std::cout << "    Bounding box: (" << segment.left() << ", " << segment.top() << ", " << segment.right() << ", " << segment.bottom() << ")" << std::endl;
+                std::cout << "    Image Width: " << segment.image().width() << std::endl;
+                std::cout << "    Image Height: " << segment.image().height() << std::endl;
+                std::cout << "    Image Colorspace: " << segment.image().colorspace() << std::endl;
+                std::cout << "    Image Buffer size: " << segment.image().buffer().size() << " bytes" << std::endl;
             }
         }
 

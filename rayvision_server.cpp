@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <atomic>
+#include <cstring>
 
 // Global flag for graceful shutdown
 std::atomic<bool> g_shutdown_requested(false);
@@ -31,7 +32,11 @@ public:
         image_data.width = 1920;
         image_data.height = 1080;
         image_data.colorspace = 0; // RGB
-        image_data.buffer = "simulated_image_data_" + std::to_string(cameraType);
+
+        // Create a simulated buffer with some data
+        std::string buffer_str = "simulated_image_data_" + std::to_string(cameraType);
+        image_data.buffer.resize(buffer_str.size());
+        std::memcpy(image_data.buffer.data(), buffer_str.data(), buffer_str.size());
 
         return image_data;
     }

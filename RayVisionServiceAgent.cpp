@@ -54,12 +54,21 @@ public:
             if (reactor && !reactor->IsFinished()) {
                 // Convert to gRPC response
                 rayvisiongrpc::SegmentationResult grpc_result;
-                for (const auto& segment : segmentation_result.segments) {
-                    auto* grpc_segment = grpc_result.add_segments();
-                    grpc_segment->set_width(segment.width);
-                    grpc_segment->set_height(segment.height);
-                    grpc_segment->set_colorspace(static_cast<rayvisiongrpc::ColorSpace>(segment.colorspace));
-                    grpc_segment->set_buffer(segment.buffer);
+                for (const auto& segment_ptr : segmentation_result.segments) {
+                    if (segment_ptr) {
+                        auto* grpc_segment = grpc_result.add_segments();
+                        grpc_segment->set_left(segment_ptr->left);
+                        grpc_segment->set_top(segment_ptr->top);
+                        grpc_segment->set_right(segment_ptr->right);
+                        grpc_segment->set_bottom(segment_ptr->bottom);
+
+                        // Set the image data
+                        auto* grpc_image = grpc_segment->mutable_image();
+                        grpc_image->set_width(segment_ptr->image.width);
+                        grpc_image->set_height(segment_ptr->image.height);
+                        grpc_image->set_colorspace(static_cast<rayvisiongrpc::ColorSpace>(segment_ptr->image.colorspace));
+                        grpc_image->set_buffer(segment_ptr->image.buffer.data(), segment_ptr->image.buffer.size());
+                    }
                 }
 
                 reactor->StartWrite(&grpc_result);
@@ -162,7 +171,7 @@ private:
                 response_->set_width(image_data.width);
                 response_->set_height(image_data.height);
                 response_->set_colorspace(static_cast<rayvisiongrpc::ColorSpace>(image_data.colorspace));
-                response_->set_buffer(image_data.buffer);
+                response_->set_buffer(image_data.buffer.data(), image_data.buffer.size());
 
                 std::cout << "[RAYVISION] GetImage response prepared (size: " << response_->buffer().size() << " bytes)" << std::endl;
                 Finish(grpc::Status::OK);
